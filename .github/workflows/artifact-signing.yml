@@ -1,0 +1,75 @@
+name: Artifact Signing
+
+on:
+  push:
+    branches:
+      - main
+      - dev
+
+  pull_request:
+    branches:
+      - main
+      - dev
+
+jobs:
+  sign-artifact:
+    name: Build and Sign Artifact
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Build Project
+        run: npm run build
+
+      - name: Package Build
+        shell: pwsh
+        run: |
+          Compress-Archive -Path dist\* -DestinationPath medscribe-frontend.zip
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Restore Cosign Private Key
+        shell: bash
+        run: |
+          echo "${{ secrets.COSIGN_PRIVATE_KEY }}" > cosign.key
+
+      - name: Sign Artifact
+        shell: bash
+        env:
+          COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
+        run: |
+          cosign sign-blob \
+            --key cosign.key \
+            --output-signature medscribe-frontend.zip.sig \
+            medscribe-frontend.zip
+
+      - name: Verify Signature
+        shell: bash
+        run: |
+          cosign verify-blob \
+            --key security/cosign.pub \
+            --signature medscribe-frontend.zip.sig \
+            medscribe-frontend.zip
+
+      - name: Upload Build Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: medscribe-build
+          path: medscribe-frontend.zip
+
+      - name: Upload Signature
+        uses: actions/upload-artifact@v4
+        with:
+          name: medscribe-signature
+          path: medscribe-frontend.zip.sig
