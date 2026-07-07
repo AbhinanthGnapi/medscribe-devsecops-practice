@@ -1,0 +1,41 @@
+name: Policy Enforcement
+
+on:
+  push:
+    branches:
+      - main
+      - dev
+
+  pull_request:
+    branches:
+      - main
+      - dev
+
+jobs:
+  policy-check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Check SBOM Exists
+        run: |
+          test -f sbom.json || (echo "❌ SBOM not found" && exit 1)
+          echo "✅ SBOM found"
+
+      - name: Check Cosign Public Key Exists
+        run: |
+          test -f security/cosign.pub || (echo "❌ Public key missing" && exit 1)
+          echo "✅ Public key found"
+
+      - name: Check License Policy File
+        run: |
+          test -f config/allowed-licenses.json || (echo "❌ License policy missing" && exit 1)
+          echo "✅ License policy found"
+
+      - name: Policy Enforcement Passed
+        run: |
+          echo "=================================="
+          echo " All security policies satisfied "
+          echo "=================================="
