@@ -50,9 +50,10 @@ jobs:
           COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
         run: |
           cosign sign-blob \
+            --yes \
             --key cosign.key \
             --output-signature medscribe-frontend.zip.sig \
-            medscribe-frontend.zip
+            medscribe-frontend.zip 
 
       - name: Verify Signature
         shell: bash
