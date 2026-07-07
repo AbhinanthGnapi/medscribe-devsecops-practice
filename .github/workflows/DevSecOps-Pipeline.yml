@@ -10,6 +10,10 @@ on:
     branches:
       - main
       - dev
+env:
+  NODE_VERSION: "22"
+  BUILD_DIR: "dist"
+  ARTIFACT_NAME: "application.zip"
 
 jobs:
 
@@ -24,7 +28,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: ${{ env.NODE_VERSION }}
 
       - name: Install Dependencies
         run: npm ci
@@ -52,7 +56,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: ${{ env.NODE_VERSION }}
 
       - name: Install Project Dependencies
         run: npm ci
@@ -79,11 +83,12 @@ jobs:
           path: |
             licenses.json
             licenses.txt
+
   artifact-signing:
+      name: Build and Sign Artifact
       needs:
         - generate-sbom
         - license-check
-      name: Build and Sign Artifact
       runs-on: windows-latest
 
       steps:
@@ -93,7 +98,7 @@ jobs:
         - name: Setup Node.js
           uses: actions/setup-node@v4
           with:
-            node-version: 22
+            node-version: ${{ env.NODE_VERSION }}
 
         - name: Install Dependencies
           run: npm ci
@@ -102,9 +107,11 @@ jobs:
           run: npm run build
 
         - name: Package Build
-          shell: pwsh
+          shell: pwsh 
           run: |
-            Compress-Archive -Path dist\* -DestinationPath medscribe-frontend.zip
+            Compress-Archive `
+              -Path "${{ env.BUILD_DIR }}\*" `
+              -DestinationPath "${{ env.ARTIFACT_NAME }}"
 
         - name: Install Cosign
           uses: sigstore/cosign-installer@v3
@@ -120,30 +127,30 @@ jobs:
             COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
           run: |
             cosign sign-blob \
-              --yes \
-              --key cosign.key \
-              --output-signature medscribe-frontend.zip.sig \
-              medscribe-frontend.zip 
+            --yes \
+            --key cosign.key \
+            --output-signature "${{ env.ARTIFACT_NAME }}.sig" \
+            "${{ env.ARTIFACT_NAME }}"
 
         - name: Verify Signature
           shell: bash
           run: |
             cosign verify-blob \
               --key security/cosign.pub \
-              --signature medscribe-frontend.zip.sig \
-              medscribe-frontend.zip
+              --signature "${{ env.ARTIFACT_NAME }}.sig" \
+              "${{ env.ARTIFACT_NAME }}"
 
         - name: Upload Build Artifact
           uses: actions/upload-artifact@v4
           with:
             name: medscribe-build
-            path: medscribe-frontend.zip
+            path: ${{ env.ARTIFACT_NAME }}
 
         - name: Upload Signature
           uses: actions/upload-artifact@v4
           with:
             name: medscribe-signature
-            path: medscribe-frontend.zip.sig
+            path: ${{ env.ARTIFACT_NAME }}.sig
   
   policy-check:
       name: Policy Enforcement
@@ -155,23 +162,68 @@ jobs:
         - name: Checkout Repository
           uses: actions/checkout@v4
 
-        - name: Check SBOM Exists
+        - name: Download SBOM
+          uses: actions/download-artifact@v4
+          with:
+            name: sbom-report
+
+        - name: Download License Report
+          uses: actions/download-artifact@v4
+          with:
+            name: license-report
+
+        - name: Download Build Artifact
+          uses: actions/download-artifact@v4
+          with:
+            name: medscribe-build
+
+        - name: Download Signature
+          uses: actions/download-artifact@v4
+          with:
+            name: medscribe-signature
+
+        - name: Validate SBOM
           run: |
             test -f sbom.json || (echo "❌ SBOM not found" && exit 1)
             echo "✅ SBOM found"
 
-        - name: Check Cosign Public Key Exists
+        - name: Validate License Report
           run: |
-            test -f security/cosign.pub || (echo "❌ Public key missing" && exit 1)
-            echo "✅ Public key found"
+            test -f licenses.json || (echo "❌ License report not found" && exit 1)
+            echo "✅ License report found"
 
-        - name: Check License Policy File
+        - name: Validate License Policy
           run: |
             test -f config/allowed-licenses.json || (echo "❌ License policy missing" && exit 1)
             echo "✅ License policy found"
 
+        - name: Validate Cosign Public Key
+          run: |
+            test -f security/cosign.pub || (echo "❌ Public key missing" && exit 1)
+            echo "✅ Public key found"
+
+        - name: Validate Build Artifact
+          run: |
+            test -f "${{ env.ARTIFACT_NAME }}" || (echo "❌ Build artifact missing" && exit 1)
+            echo "✅ Build artifact found"
+
+        - name: Validate Signature
+          run: |
+            test -f "${{ env.ARTIFACT_NAME }}.sig" || (echo "❌ Signature missing" && exit 1)
+            echo "✅ Signature found"
+
+        - name: Install Cosign
+          uses: sigstore/cosign-installer@v3
+
+        - name: Verify Artifact Signature
+          run: |
+            cosign verify-blob \
+              --key security/cosign.pub \
+              --signature "${{ env.ARTIFACT_NAME }}.sig" \
+              "${{ env.ARTIFACT_NAME }}"
+
         - name: Policy Enforcement Passed
           run: |
-            echo "=================================="
-            echo " All security policies satisfied "
-            echo "=================================="
+            echo "======================================"
+            echo " DevSecOps Policy Enforcement Passed "
+            echo "======================================"
