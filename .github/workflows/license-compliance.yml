@@ -40,22 +40,8 @@ jobs:
       - name: Display License Summary
         run: license-checker --summary
 
-      - name: Check for Disallowed Licenses
-        shell: bash
-        run: |
-          ALLOWED_LICENSES="MIT|Apache-2.0|BSD|BSD-2-Clause|BSD-3-Clause|ISC|CC0-1.0|Python-2.0"
-
-          while IFS= read -r line
-          do
-            if [[ "$line" =~ licenses:\ (.*)$ ]]; then
-              license="${BASH_REMATCH[1]}"
-
-              if ! [[ "$license" =~ ^($ALLOWED_LICENSES)$ ]]; then
-                echo "Disallowed License Found: $license"
-                exit 1
-              fi
-            fi
-          done < licenses.txt
+      - name: Validate License Policy
+        run: node scripts/check-licenses.js
 
       - name: Upload License Reports
         uses: actions/upload-artifact@v4
