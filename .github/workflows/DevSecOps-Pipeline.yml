@@ -1,0 +1,177 @@
+name: DevSecOps Pipeline
+
+on:
+  push:
+    branches:
+      - main
+      - dev
+
+  pull_request:
+    branches:
+      - main
+      - dev
+
+jobs:
+
+  generate-sbom:
+    name: Generate Software Bill of Materials
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Install CycloneDX Generator
+        run: npm install -g @cyclonedx/cyclonedx-npm
+
+      - name: Generate SBOM
+        run: cyclonedx-npm --output-file sbom.json
+
+      - name: Upload SBOM
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-report
+          path: sbom.json
+
+  license-check:
+    name: Verify Open Source Licenses
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install Project Dependencies
+        run: npm ci
+
+      - name: Install License Checker
+        run: npm install -g license-checker
+
+      - name: Generate JSON License Report
+        run: license-checker --json --out licenses.json
+
+      - name: Generate Text License Report
+        run: license-checker > licenses.txt
+
+      - name: Display License Summary
+        run: license-checker --summary
+
+      - name: Validate License Policy
+        run: node scripts/check-licenses.cjs
+
+      - name: Upload License Reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: license-report
+          path: |
+            licenses.json
+            licenses.txt
+  artifact-signing:
+      needs:
+        - generate-sbom
+        - license-check
+      name: Build and Sign Artifact
+      runs-on: windows-latest
+
+      steps:
+        - name: Checkout Repository
+          uses: actions/checkout@v4
+
+        - name: Setup Node.js
+          uses: actions/setup-node@v4
+          with:
+            node-version: 22
+
+        - name: Install Dependencies
+          run: npm ci
+
+        - name: Build Project
+          run: npm run build
+
+        - name: Package Build
+          shell: pwsh
+          run: |
+            Compress-Archive -Path dist\* -DestinationPath medscribe-frontend.zip
+
+        - name: Install Cosign
+          uses: sigstore/cosign-installer@v3
+
+        - name: Restore Cosign Private Key
+          shell: bash
+          run: |
+            echo "${{ secrets.COSIGN_PRIVATE_KEY }}" > cosign.key
+
+        - name: Sign Artifact
+          shell: bash
+          env:
+            COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
+          run: |
+            cosign sign-blob \
+              --yes \
+              --key cosign.key \
+              --output-signature medscribe-frontend.zip.sig \
+              medscribe-frontend.zip 
+
+        - name: Verify Signature
+          shell: bash
+          run: |
+            cosign verify-blob \
+              --key security/cosign.pub \
+              --signature medscribe-frontend.zip.sig \
+              medscribe-frontend.zip
+
+        - name: Upload Build Artifact
+          uses: actions/upload-artifact@v4
+          with:
+            name: medscribe-build
+            path: medscribe-frontend.zip
+
+        - name: Upload Signature
+          uses: actions/upload-artifact@v4
+          with:
+            name: medscribe-signature
+            path: medscribe-frontend.zip.sig
+  
+  policy-check:
+      name: Policy Enforcement
+      needs:
+        - artifact-signing
+      runs-on: ubuntu-latest
+
+      steps:
+        - name: Checkout Repository
+          uses: actions/checkout@v4
+
+        - name: Check SBOM Exists
+          run: |
+            test -f sbom.json || (echo "❌ SBOM not found" && exit 1)
+            echo "✅ SBOM found"
+
+        - name: Check Cosign Public Key Exists
+          run: |
+            test -f security/cosign.pub || (echo "❌ Public key missing" && exit 1)
+            echo "✅ Public key found"
+
+        - name: Check License Policy File
+          run: |
+            test -f config/allowed-licenses.json || (echo "❌ License policy missing" && exit 1)
+            echo "✅ License policy found"
+
+        - name: Policy Enforcement Passed
+          run: |
+            echo "=================================="
+            echo " All security policies satisfied "
+            echo "=================================="
