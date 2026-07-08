@@ -250,8 +250,8 @@ jobs:
           SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
         with:
           args: >
-            -Dsonar.projectKey=harignapi_Olympus
-            -Dsonar.organization=harignapi
+            -Dsonar.projectKey=${{ secrets.SONAR_PROJECT_KEY }}
+            -Dsonar.organization=${{ secrets.SONAR_ORGANIZATION }}
 
   sca:
     name: SCA (Snyk & OSV-Scanner)
