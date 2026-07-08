@@ -11,6 +11,12 @@ on:
     branches:
       - main
       - dev
+
+permissions:
+  contents: read
+  security-events: write
+  actions: read
+
 env:
   NODE_VERSION: "22"
   BUILD_DIR: "dist"
@@ -228,3 +234,132 @@ jobs:
             echo "======================================"
             echo " DevSecOps Policy Enforcement Passed "
             echo "======================================"
+
+  sast:
+    name: SAST (SonarQube)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: SonarQube Scan
+        uses: SonarSource/sonarqube-scan-action@master
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+        with:
+          args: >
+            -Dsonar.projectKey=harignapi_Olympus
+            -Dsonar.organization=harignapi
+
+  sca:
+    name: SCA (Snyk & OSV-Scanner)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+      - name: Snyk Node Scan
+        uses: snyk/actions/node@master
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+
+  osv-scan:
+    name: OSV-Scanner
+    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@main
+    with:
+      upload-sarif: false
+
+  dast:
+    name: DAST (OWASP ZAP)
+    runs-on: ubuntu-latest
+    # This postgres service is spun up for backends that need it.
+    # Frontend projects will simply ignore it, meaning this workflow can be shared!
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: testuser
+          POSTGRES_PASSWORD: testpassword
+          POSTGRES_DB: olympus_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install Dependencies
+        run: npm install
+      - name: Build and Start Application
+        run: |
+          # Load .env.ci if it exists for the repository (backend usually needs this)
+          if [ -f .env.ci ]; then
+            export $(grep -v '^#' .env.ci | xargs)
+          fi
+          
+          npm run build
+          
+          # Auto-detect if this is a Frontend (React/Vite) or Backend (Nest/Express)
+          # We do this by checking if the 'preview' script exists in package.json
+          if grep -q '"preview":' package.json; then
+            echo "🚀 Frontend project detected. Starting preview server..."
+            npm run preview &
+            echo "ZAP_TARGET=http://localhost:4173" >> $GITHUB_ENV
+          else
+            echo "🚀 Backend project detected. Starting prod server..."
+            HOST=0.0.0.0 npm run start:prod &
+            echo "ZAP_TARGET=http://172.17.0.1:3010" >> $GITHUB_ENV
+          fi
+          
+          echo "Waiting 15 seconds for application to boot..."
+          sleep 15
+          
+      - name: OWASP ZAP Full Scan
+        uses: zaproxy/action-full-scan@v0.13.0
+        with:
+          target: ${{ env.ZAP_TARGET }}
+          allow_issue_writing: false
+          artifact_name: 'zap-scan'
+
+  iac:
+    name: IaC Scan (Trivy & Checkov)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'table'
+          exit-code: '1'
+          ignore-unfixed: true
+          vuln-type: 'os,library'
+          severity: 'CRITICAL,HIGH'
+      - name: Checkov Scan
+        uses: bridgecrewio/checkov-action@master
+        with:
+          directory: '.'
+          framework: all
+
+  secret-scan:
+    name: Secret Scanning (Gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Run Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
