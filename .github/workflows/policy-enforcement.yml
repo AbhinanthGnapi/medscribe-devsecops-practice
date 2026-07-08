@@ -11,6 +11,9 @@ on:
       - main
       - dev
 
+permissions:
+  contents: read
+
 jobs:
   policy-check:
     runs-on: ubuntu-latest

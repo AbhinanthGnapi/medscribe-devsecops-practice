@@ -11,6 +11,9 @@ on:
       - main
       - dev
 
+permissions:
+  contents: read
+
 jobs:
   license-check:
     name: Verify Open Source Licenses
